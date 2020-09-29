@@ -4,16 +4,21 @@ import android.os.Build.VERSION
 import eu.kanade.tachiyomi.extension.BuildConfig
 import eu.kanade.tachiyomi.lib.ratelimit.RateLimitInterceptor
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.source.model.*
+import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
+import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.SChapter
+import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Locale
 import okhttp3.Headers
+import okhttp3.OkHttpClient
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import rx.Observable
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 
 class Dilbert : ParsedHttpSource() {
 
@@ -25,7 +30,7 @@ class Dilbert : ParsedHttpSource() {
 
     override val supportsLatest = false
 
-    override val client = network.client.newBuilder()
+    override val client: OkHttpClient = network.client.newBuilder()
         .addNetworkInterceptor(RateLimitInterceptor(4)).build()
 
     private val userAgent = "Mozilla/5.0 " +
@@ -41,25 +46,31 @@ class Dilbert : ParsedHttpSource() {
 
     override fun fetchPopularManga(page: Int): Observable<MangasPage> {
         val currentYear = Calendar.getInstance().get(Calendar.YEAR)
-        return Observable.just(MangasPage((currentYear downTo 1989).map {
-            SManga.create().apply {
-                url = "?$it"
-                title = "$name ($it)"
-                artist = "Scott Adams"
-                author = "Scott Adams"
-                status = if (it < currentYear) SManga.COMPLETED else SManga.ONGOING
-                description = """
+        return Observable.just(
+            MangasPage(
+                (currentYear downTo 1989).map {
+                    SManga.create().apply {
+                        url = "?$it"
+                        title = "$name ($it)"
+                        artist = "Scott Adams"
+                        author = "Scott Adams"
+                        status = if (it < currentYear) SManga.COMPLETED else SManga.ONGOING
+                        description =
+                            """
                 A satirical comic strip featuring Dilbert, a competent, but seldom recognized engineer.
                 (This entry includes all the chapters published in $it.)
-                """.trimIndent()
-                thumbnail_url = "https://dilbert.com/assets/favicon/favicon-196x196-cf4d86b485e628a034ab8b961c1c3520b5969252400a80b9eed544d99403e037.png"
-            }
-        }, false))
+                            """.trimIndent()
+                        thumbnail_url = "https://dilbert.com/assets/favicon/favicon-196x196-cf4d86b485e628a034ab8b961c1c3520b5969252400a80b9eed544d99403e037.png"
+                    }
+                },
+                false
+            )
+        )
     }
 
     override fun fetchSearchManga(page: Int, query: String, filters: FilterList) = fetchPopularManga(page)
 
-    override fun fetchMangaDetails(manga: SManga) =
+    override fun fetchMangaDetails(manga: SManga): Observable<SManga> =
         Observable.just(manga.apply { initialized = true })
 
     private fun chapterListRequest(manga: SManga, page: Int = 1) =
@@ -69,7 +80,7 @@ class Dilbert : ParsedHttpSource() {
         val date = element.first(".comic-title-date").text()
         url = element.first(".img-comic-link").attr("href")
         name = element.first(".comic-title-name").text().ifBlank { date }
-        date_upload = dateFormat.parse(date).time
+        date_upload = dateFormat.parse(date)?.time ?: 0L
     }
 
     override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> {
@@ -84,11 +95,12 @@ class Dilbert : ParsedHttpSource() {
                 chapters.addAll(it.select(".comic-item").map(::chapterFromElement))
             }
         }
-        val pages = getChapters().first(".pagination > li:nth-last-child(2) > a").text().toInt()
-        for (page in 2..pages) getChapters(page)
+        val pages = getChapters().first(".pagination > li:nth-last-child(2) > a")?.text()?.toIntOrNull()
+        if (pages != null) for (page in 2..pages) getChapters(page)
         return Observable.just(
             chapters.sortedBy(SChapter::date_upload).mapIndexed {
-                i, ch -> ch.apply { chapter_number = i + 1f }
+                i, ch ->
+                ch.apply { chapter_number = i + 1f }
             }.reversed()
         )
     }

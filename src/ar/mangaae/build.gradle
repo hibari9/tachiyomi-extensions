@@ -2,11 +2,15 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
 ext {
-    appName = 'Tachiyomi: Manga.ae'
+    extName = 'Manga.ae'
     pkgNameSuffix = 'ar.mangaae'
     extClass = '.MangaAe'
-    extVersionCode = 3
+    extVersionCode = 7
     libVersion = '1.2'
+}
+
+dependencies {
+    implementation project(':lib-ratelimit')
 }
 
 apply from: "$rootDir/common.gradle"

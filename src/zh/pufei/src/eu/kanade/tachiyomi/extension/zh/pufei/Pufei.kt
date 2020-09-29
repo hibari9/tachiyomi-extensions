@@ -1,22 +1,29 @@
 package eu.kanade.tachiyomi.extension.zh.pufei
 
-import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.source.model.*
-import eu.kanade.tachiyomi.source.online.ParsedHttpSource
-import eu.kanade.tachiyomi.util.asJsoup
-import okhttp3.HttpUrl
-import okhttp3.Request
-import okhttp3.Response
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
-import java.lang.UnsupportedOperationException
-import com.squareup.duktape.Duktape
-import android.util.Base64
-
 // temp patch:
 // https://github.com/inorichi/tachiyomi/pull/2031
 
-import org.jsoup.Jsoup // import for patch
+import android.util.Base64
+import com.squareup.duktape.Duktape
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.model.Filter
+import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
+import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.SChapter
+import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import okhttp3.HttpUrl
+import okhttp3.Interceptor
+import okhttp3.MediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import java.net.URL
 
 fun asJsoup(response: Response, html: String? = null): Document {
     return Jsoup.parse(html ?: bodyWithAutoCharset(response), response.request().url().toString())
@@ -27,7 +34,7 @@ fun bodyWithAutoCharset(response: Response, _charset: String? = null): String {
     var c = _charset
 
     if (c == null) {
-        var regexPat = Regex("""charset=(\w+)""")
+        val regexPat = Regex("""charset=(\w+)""")
         val match = regexPat.find(String(htmlBytes))
         c = match?.groups?.get(1)?.value
     }
@@ -42,17 +49,34 @@ fun ByteArray.toHexString() = joinToString("%") { "%02x".format(it) }
 class Pufei : ParsedHttpSource() {
 
     override val name = "扑飞漫画"
-    override val baseUrl = "http://m.pufei.net"
+    override val baseUrl = "http://m.pufei8.com"
     override val lang = "zh"
     override val supportsLatest = true
-    val imageServer = "http://res.img.pufei.net/"
+    val imageServer = "http://res.img.youzipi.net/"
+    val thumbnailBaseUrl = "http://i.youzipi.net/"
+
+    override val client: OkHttpClient
+        get() = network.client.newBuilder()
+            .addNetworkInterceptor(rewriteOctetStream)
+            .build()
+
+    private val rewriteOctetStream: Interceptor = Interceptor { chain ->
+        val originalResponse: Response = chain.proceed(chain.request())
+        if (originalResponse.headers("Content-Type").contains("application/octet-stream") && originalResponse.request().url().toString().contains(".jpg")) {
+            val orgBody = originalResponse.body()!!.bytes()
+            val newBody = ResponseBody.create(MediaType.parse("image/jpeg"), orgBody)
+            originalResponse.newBuilder()
+                .body(newBody)
+                .build()
+        } else originalResponse
+    }
 
     override fun popularMangaSelector() = "ul#detail li"
 
     override fun latestUpdatesSelector() = popularMangaSelector()
 
     override fun headersBuilder() = super.headersBuilder()
-            .add("Referer", baseUrl)
+        .add("Referer", baseUrl)
 
     override fun popularMangaRequest(page: Int) = GET("$baseUrl/manhua/paihang.html", headers)
 
@@ -81,6 +105,8 @@ class Pufei : ParsedHttpSource() {
         val manga = SManga.create()
         manga.description = infoElement.select("div#bookIntro > p").text().trim()
         manga.thumbnail_url = infoElement.select("div.thumb > img").first()?.attr("src")
+        val relativeThumnailURL = URL(infoElement.select("div.thumb > img").first()?.attr("src")).path
+        manga.thumbnail_url = "$thumbnailBaseUrl$relativeThumnailURL"
 //        manga.author = infoElement.select("dd").first()?.text()
         return manga
     }
@@ -129,7 +155,7 @@ class Pufei : ParsedHttpSource() {
         val imgbase64 = re.find(html)?.groups?.get(1)?.value
         val imgCode = String(Base64.decode(imgbase64, Base64.DEFAULT))
         val imgArrStr = Duktape.create().use {
-            it.evaluate(imgCode + """.join('|')""") as String
+            it.evaluate("$imgCode.join('|')") as String
         }
         return imgArrStr.split('|').mapIndexed { i, imgStr ->
             Page(i, "", imageServer + imgStr)
@@ -141,11 +167,11 @@ class Pufei : ParsedHttpSource() {
     private class GenreFilter(genres: Array<String>) : Filter.Select<String>("Genre", genres)
 
     override fun getFilterList() = FilterList(
-            GenreFilter(getGenreList())
+        GenreFilter(getGenreList())
     )
 
     private fun getGenreList() = arrayOf(
-            "All"
+        "All"
     )
 
     // temp patch
@@ -156,11 +182,7 @@ class Pufei : ParsedHttpSource() {
             latestUpdatesFromElement(element)
         }
 
-        val hasNextPage = latestUpdatesNextPageSelector()?.let { selector ->
-            document.select(selector).first()
-        } != null
-
-        return MangasPage(mangas, hasNextPage)
+        return MangasPage(mangas, false)
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -170,11 +192,7 @@ class Pufei : ParsedHttpSource() {
             popularMangaFromElement(element)
         }
 
-        val hasNextPage = popularMangaNextPageSelector()?.let { selector ->
-            document.select(selector).first()
-        } != null
-
-        return MangasPage(mangas, hasNextPage)
+        return MangasPage(mangas, false)
     }
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -195,4 +213,3 @@ class Pufei : ParsedHttpSource() {
     }
     // patch finish
 }
-
